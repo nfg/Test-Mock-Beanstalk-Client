@@ -1,5 +1,5 @@
 {
-   "abstract" : "Blah blah blah",
+   "abstract" : "Replacement for Beanstalk::Client",
    "author" : [
       "Nigel Gregoire <nigelgregoire@gmail.com>"
    ],
