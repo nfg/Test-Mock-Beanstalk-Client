@@ -8,6 +8,10 @@ use Beanstalk::Job;
 use List::MoreUtils 'first_index';
 use List::Util 'min';
 use YAML::Syck ();
+use Test::Mock::Beanstalk::MetaJob;
+
+# While developing
+use Data::Printer return_value => 'dump';
 
 # Public attributes, all from Beanstalk::Client docs
 has server  => ( is => 'rw', default => 'localhost:11300' );
@@ -35,16 +39,15 @@ sub _queue_job
     my $self = shift;
     my $metadata = shift;
     my $tube = ($tubes{ $self->_using } ||= []);
-    $metadata->{start} = time() + $metadata->{delay};
 
     # Record in hash for easy lookup
-    $job_to_tube{ $metadata->{job}->id } = $self->_using;
+    $job_to_tube{ $metadata->job->id } = $metadata->tube;
 
     my $index = first_index {
         # Keep going 'til we're the higher priority...
-        $metadata->{priority} > $_->{priority}
+        $metadata->priority > $_->priority
         # Or priority is the same, but we should start sooner
-        || ( $metadata->{priority} == $_->{priority} && $metadata->{start} > $_->{start} )
+        || ( $metadata->priority == $_->priority && $metadata->start > $_->start )
     } @$tube;
 
     if ($index == -1) { # Empty tube
@@ -52,35 +55,50 @@ sub _queue_job
         return;
     }
 
-    print "INDEX: $index\n";
+#    print "INDEX: $index\n";
     splice @$tube, $index, 0, $metadata;
 }
 
-use Data::Printer return_value => 'dump';
 sub _next_job
 {
-    my ($self, $tube_name) = @_;
+    my ($self, $tube_name, $ignore_ttr) = @_;
     my $tube = $tubes{$tube_name};
     return unless $tube;
 
-    my @list =
-        sort { $a->{priority} <=> $b->{priority} }
-        grep {
-            ! $_->{job}->reserved && ! $_->{job}->buried
-            && $_->{start} <= time() }
-        map {
+    # Cleanup
+    @$tube = map {
+        my @ret;
+        if (! $_->deleted) {
+            push @ret, $_;
             # Release any jobs past ttr
-            if ($_->{job}->reserved() && $_->{next_try} < time()) {
-                $_->{job}->reserved(0);
+            if ($_->job->reserved() && $_->start < time()) {
+                print STDERR "Releasing job!";
+                $_->job->reserved(0);
             }
-            $_;
+        }
+        @ret;
+    } @$tube;
+
+#    foreach my $data (@$tube) {
+#        print "RESERVED: " . ($data->{job}->reserved // 0) . " DATA: " . $data->{job}->data;
+#        print "\n";
+#    }
+#
+    my @list =
+        sort { $a->priority <=> $b->priority }
+        grep {
+            ! $_->job->reserved && ! $_->job->buried
+            && $_->start <= time();
         } @$tube;
     if (scalar @list) {
-#        print STDERR "DEBUG: Got multiple ready jobs: " . p(@list);
+#        if (scalar @list > 1) {
+#            print STDERR "DEBUG: Got multiple ready jobs: " . p(@list);
+#        }
         return $list[0];
     }
-    my $earliest = min map { $_->{start} } @$tube;
-    @list = grep { $_->{start} == $earliest } @$tube;
+
+    my $earliest = min map { $_->start } grep { ! $_->job->reserved() } @$tube;
+    @list = grep { $_->start == $earliest } grep { ! $_->job->reserved() } @$tube;
 #    if (scalar @list > 1) {
 #        print STDERR "DEBUG: Got multiple jobs for same time: " . p(@list);
 #    }
@@ -90,23 +108,19 @@ sub _next_job
 my $job_id = 0;
 sub _new_job_id { ++$job_id }
 
+
 sub put {
     my $self = shift;
     my $opt = shift || {};
 
-    my $metadata = {};
-    foreach my $field (qw(priority ttr delay)) {
-        $metadata->{$field} = exists $opt->{$field} ? $opt->{$field} : $self->$field;
-    }
     my $data = $opt->{data} || $self->encoder->(@_);
-
     my $job = Beanstalk::Job->new({
             id      => _new_job_id(),
             client  => $self,
             buried  => 0,
             data    => $data
         });
-    $metadata->{job} = $job;
+    my $metadata = Test::Mock::Beanstalk::MetaJob->new($self, $opt, $job);
     $self->_queue_job($metadata);
     return $job;
 }
@@ -114,9 +128,10 @@ sub put {
 sub _reserve
 {
     my $metadata = shift;
-    $metadata->{next_try} = time() + $metadata->{job}->ttr;
-    $metadata->{job}->reserved(1);
-    return $metadata->{job};
+    $metadata->start(time() + $metadata->ttr);
+    $metadata->job->reserved(1);
+
+    return $metadata->job;
 }
 
 sub reserve {
@@ -159,28 +174,26 @@ sub reserve {
     return;
 }
 
+sub _fetch_job
+{
+    my $job_id = shift;
+    return unless exists $job_to_tube{$job_id};
+    foreach (@{ $tubes{ $job_to_tube{$job_id} } }) {
+        return $_ if $_->{job}->id eq $job_id;
+    }
+    delete $job_to_tube{$job_id};
+    return;
+}
+
 sub delete
 {
     my $self = shift;
     my $job_id = shift;
 
-    if (! exists $job_to_tube{$job_id}) {
-        return;
-    }
-    my $tube = $tubes{ $job_to_tube{$job_id} };
-    my $job;
-    @$tube = grep {
-        my $ret = 1;
-        if ($_->{job}->id eq $job_id) {
-            $ret = 0;
-            $job = $_;
-        };
-        $ret;
-    } @$tube;
+    my $metadata = _fetch_job($job_id);
+    return unless $metadata;
 
-    return unless $job;
-
-    delete $job_to_tube{$job_id};
+    $metadata->deleted(1);
     return 1;
 }
 
@@ -192,6 +205,15 @@ sub watch_only  {
     my $self = shift;
     die "Missing tube!" unless @_;
     $self->_watching(\@_);
+}
+
+sub stats_job {
+    my $self = shift;
+    my $job_id = shift;
+
+    my $metadata = _fetch_job($job_id);
+    return unless $metadata;
+    return $metadata->stats;
 }
 
 # Test methods

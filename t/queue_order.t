@@ -33,15 +33,15 @@ subtest 'Checking delay vs. priority' => sub {
 
     my $job = $client->reserve();
     cmp_deeply($job->data, "LOW PRIORITY", "Returned job with least delay first");
-#    ok($job->delete(), "Deleted job");
+    #ok($job->delete(), "Deleted job");
 
     $job = $client->reserve();
     cmp_deeply($job->data, "DELAY:3", "Returned oldest job with matching priority");
-#    ok($job->delete(), "Deleted job");
+    #ok($job->delete(), "Deleted job");
 
     $job = $client->reserve();
     cmp_deeply($job->data, "DELAY:3 #2", "Returned remaining job");
-#    ok($job->delete(), "Deleted job");
+    #ok($job->delete(), "Deleted job");
 
     is($client->reserve(0), undef, "No jobs remaining in tube");
 };
