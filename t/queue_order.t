@@ -73,8 +73,7 @@ subtest 'Checking priorities' => sub {
         $job->delete();
     }
     cmp_deeply(\@result, ['ENTRY 2', 'ENTRY 4', 'ENTRY 1', 'ENTRY 3'], "Jobs returned in expected order given priorities")
-        or diag "RESULT: " . join(',', @result) . "\nEXPECTED: 'ENTRY 2', 'ENTRY 4', 'ENTRY 1', 'ENTRY 3'";
+        or note "RESULT: " . join(',', @result) . "\nEXPECTED: 'ENTRY 2', 'ENTRY 4', 'ENTRY 1', 'ENTRY 3'";
 };
 
-
-done_testing;
+note 'DONE!';

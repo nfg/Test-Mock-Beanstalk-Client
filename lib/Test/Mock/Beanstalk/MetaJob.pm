@@ -35,18 +35,31 @@ sub BUILDARGS {
 
 sub state {
     my $self = shift;
-    return 'BURIED' if $self->job->buried;
-    return 'RESERVED' if $self->job->reserved;
-    return 'READY'; # FIXME: Handle delayed
+    return 'buried' if $self->job->buried;
+    return 'reserved' if $self->job->reserved;
+    return 'ready'; # FIXME: Handle delayed
 }
 
 sub stats {
     my $self = shift;
     my $ret = {};
-    $ret->{$_} = $self->$_() for qw(age buries delay kicks releases reserves timeouts state ttr tube);
-    $ret->{file} = '???';
+    $ret->{$_} = $self->$_() for qw(age buries delay kicks pri releases reserves timeouts state ttr tube);
+    $ret->{file} = 0; # FIXME: WHat's "file"?
     $ret->{id} = $self->job->id;
+    $ret->{pri} = $self->priority;
+    $ret->{"time-left"} = 0;
+    if ($self->job->reserved) {
+        $ret->{"time-left"} = time() - $self->start;
+    }
     return Beanstalk::Stats->new($ret);
 }
+
+sub age {
+    my $self = shift;
+    return time() - $self->created;
+}
+
+sub pri { shift->priority }
+
 
 1;
