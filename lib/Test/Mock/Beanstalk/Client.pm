@@ -26,7 +26,7 @@ has connect_timeout => ( is => 'rw' );
 has default_tube => ( is => 'rw', default => 'default' );
 has debug   => ( is => 'rw' );
 
-has _watching => ( is => 'rw', default => sub { [] } );
+has _watching => ( is => 'rw', lazy => 1, default => sub { [ shift->default_tube ] } );
 has _using  => (is => 'rw', lazy => 1, default => sub { shift->default_tube }, writer => 'use' );
 has _connected => ( is => 'rw', default => 1 );
 
@@ -34,6 +34,17 @@ my %tubes;
 
 my %job_to_tube;
 
+
+sub _fetch_job
+{
+    my $job_id = shift;
+    return unless exists $job_to_tube{$job_id};
+    foreach (@{ $tubes{ $job_to_tube{$job_id} } }) {
+        return $_ if $_->{job}->id eq $job_id;
+    }
+    delete $job_to_tube{$job_id};
+    return;
+}
 sub _queue_job
 {
     my $self = shift;
@@ -108,6 +119,8 @@ sub _next_job
 my $job_id = 0;
 sub _new_job_id { ++$job_id }
 
+################################################################################
+# Mocked methods
 
 sub put {
     my $self = shift;
@@ -125,14 +138,50 @@ sub put {
     return $job;
 }
 
-sub _reserve
-{
-    my $metadata = shift;
-    $metadata->start(time() + $metadata->ttr);
-    $metadata->job->reserved(1);
-
-    return $metadata->job;
+sub stats {
+    my $self = shift;
+    die "FIXME!";
+    return Beanstalk::Stats->new({});
 }
+
+sub stats_tube {
+    my $self = shift;
+    my $tube = shift || 'default';
+    die "FIXME!";
+}
+
+sub stats_job {
+    my $self = shift;
+    my $job_id = shift;
+
+    my $metadata = _fetch_job($job_id);
+    return unless $metadata;
+    return $metadata->stats;
+}
+
+sub kick {
+    my $self = shift;
+    my $count = shift || 1;
+
+    while ($count > 0) {
+        my $metadata =  die "YARR";
+    }
+}
+
+sub kick_job {
+    my $self = shift;
+    my $job = shift;
+    my $metadata = _fetch_job($job->id);
+    return unless $metadata;
+    return $metadata->kick();
+}
+
+#sub use {
+#    my $self = shift;
+#    my $tube = shift;
+#
+#    return $self->_using($tube);
+#}
 
 sub reserve {
     my $self = shift;
@@ -147,14 +196,14 @@ sub reserve {
 
     if ($next_job && $next_job->{start} < time()) {
         # Available job; return it.
-        return _reserve($next_job);
+        return $next_job->reserve();
     }
     elsif ($next_job) {
         # Check our timeout vs. delays.
         my $delay = $next_job->{start} - time();
         if (defined $timeout && $delay <= $timeout) {
             sleep $delay;
-            return _reserve($next_job);
+            return $next_job->reserve();
         }
         elsif (defined $timeout) {
             sleep($timeout);
@@ -163,7 +212,7 @@ sub reserve {
         else {
             # Sleeping indefinitely, but we do have a job waiting.
             sleep($delay);
-            return _reserve($next_job);
+            return $next_job->reserve();
         }
     }
     elsif (defined $timeout) {
@@ -171,17 +220,6 @@ sub reserve {
         return;
     }
     warn "Waiting on beanstalkd in a unit test! Make sure you have a test job waiting.";
-    return;
-}
-
-sub _fetch_job
-{
-    my $job_id = shift;
-    return unless exists $job_to_tube{$job_id};
-    foreach (@{ $tubes{ $job_to_tube{$job_id} } }) {
-        return $_ if $_->{job}->id eq $job_id;
-    }
-    delete $job_to_tube{$job_id};
     return;
 }
 
@@ -197,24 +235,94 @@ sub delete
     return 1;
 }
 
-
-# Mocking methods
-sub connect     { shift->_connected(1) }
-sub disconnect  { shift->_connected(0) }
-sub watch_only  {
-    my $self = shift;
-    die "Missing tube!" unless @_;
-    $self->_watching(\@_);
-}
-
-sub stats_job {
+sub touch {
     my $self = shift;
     my $job_id = shift;
 
     my $metadata = _fetch_job($job_id);
     return unless $metadata;
-    return $metadata->stats;
+    return $metadata->touch();
 }
+
+sub release {
+    my $self = shift;
+    my $job_id = shift;
+    my $opt = shift || {};
+
+    my $pri   = exists $opt->{priority} ? $opt->{priority} : $self->priority;
+    my $delay = exists $opt->{delay}    ? $opt->{delay}    : $self->delay;
+
+    my $metadata = _fetch_job($job_id);
+    return undef unless $metadata;
+    return $metadata->release();
+}
+
+sub bury {
+    my $self = shift;
+    my $job_id = shift;
+    my $opt = shift || {};
+
+    my $pri = exists $opt->{priority} ? $opt->{priority} : $self->priority;
+
+    my $metadata = _fetch_job($job_id);
+    return unless $metadata;
+    return $metadata->bury($pri);
+}
+
+sub watch {
+    my $self = shift;
+    my $tube = shift;
+
+    my %tubes = map { $_ => 1 } @{ $self->_watching }, $tube;
+    $self->_watching([ keys %tubes ]);
+    return 1;
+}
+
+sub ignore {
+    my $self = shift;
+    my $tube = shift;
+
+    my @tubes = grep { $_ ne $tube } @{ $self->_watching };
+    $self->_watching(\@tubes);
+    return 1;
+}
+
+sub watch_only  {
+    my $self = shift;
+    die "Missing tube!" unless @_;
+    $self->_watching(\@_);
+    return 1;
+}
+
+sub peek { die "peek" }
+sub peek_ready {}
+sub peek_delayed {}
+sub peek_buried {}
+
+sub list_tubes {
+}
+
+sub list_tube_used {
+    my $self = shift;
+    return $self->_using;
+}
+
+sub list_tubes_watched
+{
+}
+
+sub pause_tube {
+    my $self = shift;
+    my $tube = shift;
+    my $delay = shift || 0;
+    return 1;
+}
+
+# Mocking methods
+sub connect     { shift->_connected(1) }
+sub disconnect  { shift->_connected(0) }
+
+
 
 # Test methods
 
