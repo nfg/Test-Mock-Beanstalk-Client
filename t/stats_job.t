@@ -9,9 +9,14 @@ use Test::Mock::Beanstalk::Client;
 use Test::Warnings;
 
 use Data::Printer;
-use Beanstalk::Client;
 
-my $client = Test::Mock::Beanstalk::Client->new();
+if ($ENV{BEANSTALKD_TESTS}) { require Beanstalk::Client }
+
+my $arg = { default_tube => 'stats_job' };
+
+my $client = $ENV{BEANSTALKD_TESTS} ? Beanstalk::Client->new($arg) : Test::Mock::Beanstalk::Client->new($arg);
+
+#my $client = Test::Mock::Beanstalk::Client->new();
 #Beanstalk::Client->new();
 
 my $job = $client->put({}, { data => 1 });
@@ -33,7 +38,7 @@ cmp_deeply($job->stats,
             "time-left" => 0,
             timeouts    => 0,
             ttr => 120,
-            tube => "default"
+            tube => "stats_job"
         )
     ),
     "Got expected stats object for new job"
@@ -77,3 +82,5 @@ cmp_deeply($job->stats,
 );
 
 note 'ADD MORE TESTS!';
+
+END { $job->delete() }

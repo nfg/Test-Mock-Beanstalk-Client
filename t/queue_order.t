@@ -8,7 +8,9 @@ use Test::Deep;
 use Test::Mock::Beanstalk::Client;
 use Test::Warnings;
 
-my $client = Test::Mock::Beanstalk::Client->new();
+if ($ENV{BEANSTALKD_TESTS}) { require Beanstalk::Client }
+
+my $client = $ENV{BEANSTALKD_TESTS} ? Beanstalk::Client->new() : Test::Mock::Beanstalk::Client->new();
 
 subtest 'Checking delay vs. priority' => sub {
     $client->use('tube1');
@@ -31,19 +33,18 @@ subtest 'Checking delay vs. priority' => sub {
             data => "LOW PRIORITY",
         });
 
-    my $job = $client->reserve();
-    cmp_deeply($job->data, "LOW PRIORITY", "Returned job with least delay first");
-    #ok($job->delete(), "Deleted job");
+    my $job1 = $client->reserve();
+    cmp_deeply($job1->data, "LOW PRIORITY", "Returned job with least delay first");
 
-    $job = $client->reserve();
-    cmp_deeply($job->data, "DELAY:3", "Returned oldest job with matching priority");
-    #ok($job->delete(), "Deleted job");
+    my $job2 = $client->reserve();
+    cmp_deeply($job2->data, "DELAY:3", "Returned oldest job with matching priority");
 
-    $job = $client->reserve();
-    cmp_deeply($job->data, "DELAY:3 #2", "Returned remaining job");
-    #ok($job->delete(), "Deleted job");
+    my $job3 = $client->reserve();
+    cmp_deeply($job3->data, "DELAY:3 #2", "Returned remaining job");
 
     is($client->reserve(0), undef, "No jobs remaining in tube");
+
+    $_->delete() for ($job1, $job2, $job3);
 };
 
 subtest 'Checking priorities' => sub {
